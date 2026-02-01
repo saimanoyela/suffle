@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Block Puzzle</title>
+
+<style>
+html,body{
+    margin:0;
+    padding:0;
+    background:#070b1a;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100%;
+    font-family:system-ui;
+}
+canvas{
+    touch-action:none;
+    background:#060912; /* FIX: Canvas always visible */
+}
+</style>
+</head>
+<body>
+
+<canvas id="game"></canvas>
+
+<script>
+/* ---------- CANVAS ---------- */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+function resize(){
+    const s = Math.min(innerWidth, innerHeight);
+    canvas.width = s;
+    canvas.height = s + 180;
+}
+window.onresize = resize;
+
+/* FIX: Ensure resize happens after page load */
+window.onload = resize;
+
+/* ---------- AUDIO ---------- */
+const sndPlace = new Audio("https://assets.mixkit.co/sfx/preview/mixkit-game-click-1114.mp3");
+const sndClear = new Audio("https://assets.mixkit.co/sfx/preview/mixkit-arcade-mechanical-bling-210.mp3");
+const sndOver  = new Audio("https://assets.mixkit.co/sfx/preview/mixkit-player-losing-or-failing-2042.mp3");
+
+/* ---------- GAME DATA ---------- */
+const GRID = 10;
+let CELL = canvas.width / GRID;
+
+const COLORS = [
+ ["#00f6ff","#004d66"],
+ ["#ff5fd2","#7a1f55"],
+ ["#ffd95e","#9a7310"],
+ ["#6dff9e","#1f6a3d"],
+ ["#ff7a5c","#6a2418"],
+ ["#4d8dff","#1c2f6a"]
+];
+
+const SHAPES = [
+ [[1]], [[1,1]], [[1,1,1]],
+ [[1],[1]], [[1],[1],[1]],
+ [[1,1],[1,1]],
+ [[1,1,1],[0,1,0]]
+];
+
+let grid, blocks, drag, score;
+let timeLeft, gameOver, selectedIdx;
+
+/* ---------- INIT ---------- */
+function newBlock(){
+    return {
+        shape: SHAPES[Math.floor(Math.random()*SHAPES.length)],
+        color: COLORS[Math.floor(Math.random()*COLORS.length)]
+    };
+}
+
+function reset(){
+    grid = Array.from({length:GRID},()=>Array(GRID).fill(null));
+    blocks = [newBlock(),newBlock(),newBlock()];
+    drag = null;
+    selectedIdx = null;
+    score = 0;
+    timeLeft = 180; // 3 minutes
+    gameOver = false;
+}
+reset();
+
+/* ---------- LOGIC ---------- */
+function canPlace(shape,gx,gy){
+    for(let r=0;r<shape.length;r++)
+        for(let c=0;c<shape[r].length;c++)
+            if(shape[r][c]){
+                const x=gx+c,y=gy+r;
+                if(x<0||y<0||x>=GRID||y>=GRID||grid[y][x]) return false;
+            }
+    return true;
+}
+
+function anyMoveLeft(){
+    for(const b of blocks)
+        for(let y=0;y<GRID;y++)
+            for(let x=0;x<GRID;x++)
+                if(canPlace(b.shape,x,y)) return true;
+    return false;
+}
+
+function placeBlock(b,gx,gy){
+    for(let r=0;r<b.shape.length;r++)
+        for(let c=0;c<b.shape[r].length;c++)
+            if(b.shape[r][c]) grid[gy+r][gx+c]=b.color;
+
+    sndPlace.play();
+    score+=10;
+    clearLines();
+}
+
+function clearLines(){
+    let cleared=false;
+    for(let i=0;i<GRID;i++){
+        if(grid[i].every(v=>v)){ grid[i].fill(null); cleared=true; }
+        if(grid.every(r=>r[i])){ grid.forEach(r=>r[i]=null); cleared=true; }
+    }
+    if(cleared){ sndClear.play(); score+=50; }
+}
+
+/* ---------- DRAW ---------- */
+function drawBlock(x,y,color,glow=false){
+    const g=ctx.createLinearGradient(x,y,x,y+CELL);
+    g.addColorStop(0,color[0]);
+    g.addColorStop(1,color[1]);
+    ctx.fillStyle=g;
+    ctx.fillRect(x+4,y+4,CELL-8,CELL-8);
+
+    ctx.strokeStyle="rgba(255,255,255,.4)";
+    ctx.strokeRect(x+4,y+4,CELL-8,CELL-8);
+
+    if(glow){
+        ctx.strokeStyle="#fff";
+        ctx.lineWidth=3;
+        ctx.strokeRect(x+2,y+2,CELL-4,CELL-4);
+        ctx.lineWidth=1;
+    }
+}
+
+function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    CELL = canvas.width / GRID;
+
+    // Grid
+    for(let y=0;y<GRID;y++)
+        for(let x=0;x<GRID;x++){
+            ctx.strokeStyle="#1c2445";
+            ctx.strokeRect(x*CELL,y*CELL,CELL,CELL);
+            if(grid[y][x]) drawBlock(x*CELL,y*CELL,grid[y][x]);
+        }
+
+    // Blocks
+    blocks.forEach((b,i)=>{
+        b.x=i*(CELL*4)+CELL;
+        b.y=canvas.width+20;
+        b.shape.forEach((r,ry)=>r.forEach((v,rx)=>{
+            if(v) drawBlock(b.x+rx*CELL,b.y+ry*CELL,b.color,i===selectedIdx);
+        }));
+    });
+
+    // Drag
+    if(drag){
+        drag.shape.forEach((r,ry)=>r.forEach((v,rx)=>{
+            if(v) drawBlock(drag.x+rx*CELL,drag.y+ry*CELL,drag.color,true);
+        }));
+    }
+
+    // HUD
+    ctx.fillStyle="#8ff";
+    ctx.font="18px system-ui";
+    ctx.fillText("Score: "+score,20,canvas.width+150);
+
+    let m=Math.floor(timeLeft/60),s=timeLeft%60;
+    ctx.fillStyle=timeLeft<30?"#ff5c5c":"#8ff";
+    ctx.fillText(`Time: ${m}:${s.toString().padStart(2,"0")}`,canvas.width-130,canvas.width+150);
+
+    if(gameOver){
+        ctx.fillStyle="rgba(0,0,0,.8)";
+        ctx.fillRect(0,0,canvas.width,canvas.width);
+        ctx.fillStyle="#fff";
+        ctx.font="28px system-ui";
+        ctx.fillText("GAME OVER",canvas.width/2-90,canvas.width/2);
+        ctx.font="16px system-ui";
+        ctx.fillText("Tap to Restart",canvas.width/2-70,canvas.width/2+30);
+    }
+
+    requestAnimationFrame(draw);
+}
+draw();
+
+/* ---------- TIMER ---------- */
+setInterval(()=>{
+    if(!gameOver){
+        timeLeft--;
+        if(timeLeft<=0){
+            gameOver=true;
+            sndOver.play();
+        }
+    }
+},1000);
+
+/* ---------- INPUT ---------- */
+canvas.onmousedown=e=>{
+    if(gameOver){ reset(); return; }
+    blocks.forEach((b,i)=>{
+        if(e.offsetY>b.y){
+            selectedIdx=i;
+            drag={...b,idx:i};
+        }
+    });
+};
+
+canvas.onmousemove=e=>{
+    if(drag){
+        drag.x=e.offsetX-CELL/2;
+        drag.y=e.offsetY-CELL/2;
+    }
+};
+
+canvas.onmouseup=()=>{
+    if(drag){
+        const gx=Math.round(drag.x/CELL);
+        const gy=Math.round(drag.y/CELL);
+        if(canPlace(drag.shape,gx,gy)){
+            placeBlock(drag,gx,gy);
+            blocks.splice(drag.idx,1);
+            if(!blocks.length) blocks=[newBlock(),newBlock(),newBlock()];
+            if(!anyMoveLeft()){ gameOver=true; sndOver.play(); }
+        }
+        drag=null;
+        selectedIdx=null;
+    }
+};
+
+/* TOUCH */
+canvas.ontouchstart=e=>{
+    const t=e.touches[0],r=canvas.getBoundingClientRect();
+    canvas.onmousedown({offsetX:t.clientX-r.left,offsetY:t.clientY-r.top});
+};
+canvas.ontouchmove=e=>{
+    const t=e.touches[0],r=canvas.getBoundingClientRect();
+    canvas.onmousemove({offsetX:t.clientX-r.left,offsetY:t.clientY-r.top});
+};
+canvas.ontouchend=()=>canvas.onmouseup();
+</script>
+</body>
+</html>
